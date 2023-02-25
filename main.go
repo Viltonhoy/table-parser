@@ -7,7 +7,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gocolly/colly"
@@ -38,19 +40,44 @@ type info struct {
 	Data jsonStruct
 }
 
+const (
+	sheetId       = 0
+	spreadSheetId = "12H-u2U-BkFv57xYEijDjN8Pvk7X4aW3HBbJZjNB2JP0"
+	scope         = "https://www.googleapis.com/auth/spreadsheets"
+	url           = "https://confluence.hflabs.ru/pages/viewpage.action?pageId=1181220999"
+)
+
 func main() {
 	var wg sync.WaitGroup
 	var i info
+
+	jsonFile, err := os.Open("myproject.json")
+	if err != nil {
+		log.Error(err)
+		return
+	}
+	defer jsonFile.Close()
+
+	byteValue, _ := ioutil.ReadAll(jsonFile)
 
 	wg.Add(1)
 
 	go func() {
 		defer wg.Done()
 		t := time.NewTicker(5 * time.Second)
+		sigint := make(chan os.Signal, 1)
+		signal.Notify(sigint, syscall.SIGINT, syscall.SIGTERM)
 
-		for range t.C {
-			td := myParser()
-			saveData(i, td)
+		for {
+			select {
+			case <-t.C:
+				td := myParser()
+				saveData(i, td, byteValue)
+			case <-sigint:
+				log.Print("stopping the program")
+				return
+			}
+
 		}
 	}()
 
@@ -97,23 +124,14 @@ func myParser() []tableData {
 		fmt.Println("Request URL:", r.Request.URL, "failed with response:", r, "\nError:", err)
 	})
 
-	c.Visit("https://confluence.hflabs.ru/pages/viewpage.action?pageId=1181220999")
+	c.Visit(url)
 	return employeeData
 }
 
-func saveData(i info, tt []tableData) {
+func saveData(i info, tt []tableData, byteValue []byte) {
 	ctx := context.Background()
 
-	jsonFile, err := os.Open("myproject.json")
-	if err != nil {
-		log.Error(err)
-		return
-	}
-	defer jsonFile.Close()
-
-	byteValue, _ := ioutil.ReadAll(jsonFile)
-
-	config, err := google.JWTConfigFromJSON(byteValue, "https://www.googleapis.com/auth/spreadsheets")
+	config, err := google.JWTConfigFromJSON(byteValue, scope)
 	if err != nil {
 		log.Error(err)
 		return
@@ -126,9 +144,6 @@ func saveData(i info, tt []tableData) {
 		log.Error(err)
 		return
 	}
-
-	sheetId := 0
-	spreadSheetId := "12H-u2U-BkFv57xYEijDjN8Pvk7X4aW3HBbJZjNB2JP0"
 
 	res1, err := srv.Spreadsheets.Get(spreadSheetId).Fields("sheets(properties(sheetId,title))").Do()
 	if err != nil {
